@@ -9,11 +9,24 @@ interface ChatViewerProps {
 export default function ChatViewer({ chat }: ChatViewerProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copiedTranscript, setCopiedTranscript] = useState(false);
 
   const handleCopyMessage = (text: string, index: number) => {
     navigator.clipboard.writeText(text);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
+  const handleCopyTranscript = () => {
+    const formatted = chat.messages
+      .map((msg, index) => {
+        const speaker = msg.role === "user" ? "### 👤 HUMAN / USER" : `### 🤖 AI ASSISTANT (${chat.source})`;
+        return `${speaker}\n\n${msg.text}\n\n---\n`;
+      })
+      .join("\n");
+    navigator.clipboard.writeText(formatted);
+    setCopiedTranscript(true);
+    setTimeout(() => setCopiedTranscript(false), 2000);
   };
 
   const filteredMessages = chat.messages.filter((msg) =>
@@ -85,17 +98,36 @@ export default function ChatViewer({ chat }: ChatViewerProps) {
               {chat.title}
             </h3>
           </div>
-          {chat.url && (
-            <a
-              href={chat.url}
-              target="_blank"
-              rel="noopener noreferrer"
+          <div className="flex items-center gap-2">
+            {chat.url && (
+              <a
+                href={chat.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-stone-400 hover:text-white flex items-center gap-1.5 transition-colors font-medium bg-stone-900 px-2.5 py-1.5 rounded border border-stone-800"
+              >
+                Original Chat
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </a>
+            )}
+            <button
+              onClick={handleCopyTranscript}
               className="text-xs text-stone-400 hover:text-white flex items-center gap-1.5 transition-colors font-medium bg-stone-900 px-2.5 py-1.5 rounded border border-stone-800"
+              title="Copy the entire conversation pre-formatted as clean Markdown"
             >
-              Original Chat
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </a>
-          )}
+              {copiedTranscript ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy Transcript
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Stats */}

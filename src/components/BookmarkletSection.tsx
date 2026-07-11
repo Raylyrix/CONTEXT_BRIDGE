@@ -14,96 +14,152 @@ export default function BookmarkletSection() {
         var msgs = [];
         var host = window.location.hostname;
         
-        if (host.indexOf('claude.ai') !== -1) {
-          var turns = document.querySelectorAll('[class*="conversation-turn"], [class*="chat-turn"], [data-testid^="conversation-turn"]');
-          if (turns.length > 0) {
-            turns.forEach(function(el) {
-              var userEl = el.querySelector('[data-testid="user-message"], .font-user-message');
-              var assistEl = el.querySelector('[data-testid="assistant-message"], .font-claude-message, .prose');
-              if (userEl) msgs.push({ role: 'user', text: userEl.innerText });
-              if (assistEl) msgs.push({ role: 'assistant', text: assistEl.innerText });
-            });
-          } else {
-            var allElems = document.querySelectorAll('[data-testid="user-message"], [data-testid="assistant-message"], .font-user-message, .font-claude-message');
-            allElems.forEach(function(el) {
-              var isUser = el.getAttribute('data-testid') === 'user-message' || el.classList.contains('font-user-message');
-              msgs.push({ role: isUser ? 'user' : 'assistant', text: el.innerText });
-            });
-          }
-        } 
-        else if (host.indexOf('chatgpt.com') !== -1 || host.indexOf('chat.openai.com') !== -1) {
-          var turns = document.querySelectorAll('[data-testid^="conversation-turn"]');
-          if (turns.length > 0) {
-            turns.forEach(function(turn) {
-              var userBlock = turn.querySelector('[data-testid^="user-message"]');
-              var assistBlock = turn.querySelector('.prose');
-              if (userBlock) {
-                msgs.push({ role: 'user', text: userBlock.innerText });
-              } else if (assistBlock) {
-                msgs.push({ role: 'assistant', text: assistBlock.innerText });
-              }
-            });
-          } else {
-            var messages = document.querySelectorAll('.whitespace-pre-wrap, .prose');
-            messages.forEach(function(el) {
-              var isUser = el.closest('[data-testid^="user-message"]') || !el.classList.contains('prose');
-              msgs.push({ role: isUser ? 'user' : 'assistant', text: el.innerText });
-            });
-          }
-        }
-        else if (host.indexOf('gemini.google.com') !== -1) {
-          var queryElems = document.querySelectorAll('user-query, model-response, .query-content, .message-content, .markdown, .chat-entry');
-          queryElems.forEach(function(el) {
-            var isUser = el.tagName.toLowerCase() === 'user-query' || el.classList.contains('query-content') || el.closest('user-query');
-            var text = (el.innerText || el.textContent || '').trim();
-            if (text) {
-              var alreadyAdded = msgs.some(function(m) { return m.text === text; });
-              if (!alreadyAdded) {
-                msgs.push({ role: isUser ? 'user' : 'assistant', text: text });
-              }
+        if (host.indexOf("claude.ai") !== -1) {
+          var elems = document.querySelectorAll("[data-testid='user-message'], [data-testid='assistant-message'], .font-user-message, .font-claude-message");
+          elems.forEach(function(el) {
+            var isUser = el.getAttribute("data-testid") === "user-message" || el.classList.contains("font-user-message");
+            var txt = el.innerText || el.textContent || "";
+            txt = txt.trim();
+            if (txt) {
+              msgs.push({ role: isUser ? "user" : "assistant", text: txt });
             }
           });
-        }
-        else {
-          var authorElems = document.querySelectorAll('[data-message-author-role]');
-          if (authorElems.length > 0) {
-            authorElems.forEach(function(el) {
-              var role = el.getAttribute('data-message-author-role');
-              var text = (el.innerText || el.textContent || '').trim();
-              if (text) {
-                msgs.push({ role: role === 'user' ? 'user' : 'assistant', text: text });
+        } 
+        else if (host.indexOf("chatgpt.com") !== -1 || host.indexOf("chat.openai.com") !== -1) {
+          var elems = document.querySelectorAll("[data-message-author-role='user'], [data-message-author-role='assistant']");
+          if (elems.length > 0) {
+            elems.forEach(function(el) {
+              var role = el.getAttribute("data-message-author-role");
+              var txt = el.innerText || el.textContent || "";
+              txt = txt.trim();
+              if (txt) {
+                msgs.push({ role: role === "user" ? "user" : "assistant", text: txt });
               }
             });
           } else {
-            var mdBlocks = document.querySelectorAll('.markdown, .prose, pre, code');
+            var turns = document.querySelectorAll("[data-testid^='conversation-turn']");
+            if (turns.length > 0) {
+              turns.forEach(function(turn) {
+                var userBlock = turn.querySelector("[data-testid^='user-message']");
+                var assistBlock = turn.querySelector(".prose");
+                if (userBlock) {
+                  msgs.push({ role: "user", text: userBlock.innerText.trim() });
+                }
+                if (assistBlock) {
+                  msgs.push({ role: "assistant", text: assistBlock.innerText.trim() });
+                }
+              });
+            } else {
+              var messages = document.querySelectorAll(".whitespace-pre-wrap, .prose");
+              messages.forEach(function(el) {
+                var isUser = el.closest("[data-testid^='user-message']") || !el.classList.contains("prose");
+                msgs.push({ role: isUser ? "user" : "assistant", text: el.innerText.trim() });
+              });
+            }
+          }
+        }
+        else if (host.indexOf("gemini.google.com") !== -1) {
+          var units = document.querySelectorAll("user-query, model-response, [class*='message-loop-and-turn']");
+          if (units.length > 0) {
+            units.forEach(function(el) {
+              var isUser = el.tagName.toLowerCase() === "user-query" || el.classList.contains("query-content");
+              var txt = "";
+              if (isUser) {
+                txt = el.innerText || el.textContent || "";
+              } else {
+                var contentEl = el.querySelector(".message-content, .markdown, .model-response-text");
+                txt = (contentEl || el).innerText || (contentEl || el).textContent || "";
+              }
+              txt = txt.trim();
+              if (txt) {
+                msgs.push({ role: isUser ? "user" : "assistant", text: txt });
+              }
+            });
+          } else {
+            var queryElems = document.querySelectorAll(".query-content, .message-content");
+            queryElems.forEach(function(el) {
+              var isUser = el.classList.contains("query-content") || el.closest("user-query");
+              var txt = el.innerText.trim();
+              if (txt) {
+                msgs.push({ role: isUser ? "user" : "assistant", text: txt });
+              }
+            });
+          }
+        }
+        else {
+          var elems = document.querySelectorAll("[data-message-author-role='user'], [data-message-author-role='assistant']");
+          if (elems.length === 0) {
+            elems = document.querySelectorAll("[data-testid*='user-message'], [data-testid*='assistant-message'], [class*='UserMessage'], [class*='AssistantMessage'], [class*='chat-message-user'], [class*='chat-message-assistant']");
+          }
+          if (elems.length > 0) {
+            elems.forEach(function(el) {
+              var role = "assistant";
+              var roleAttr = el.getAttribute("data-message-author-role");
+              if (roleAttr) {
+                role = roleAttr === "user" ? "user" : "assistant";
+              } else {
+                var testId = el.getAttribute("data-testid") || "";
+                var cls = el.className || "";
+                if (testId.indexOf("user") !== -1 || cls.indexOf("User") !== -1 || cls.indexOf("user") !== -1) {
+                  role = "user";
+                }
+              }
+              var txt = el.innerText || el.textContent || "";
+              txt = txt.trim();
+              if (txt) {
+                msgs.push({ role: role, text: txt });
+              }
+            });
+          } else {
+            var mdBlocks = document.querySelectorAll(".markdown, .prose, pre, code");
             mdBlocks.forEach(function(el) {
-              var text = (el.innerText || el.textContent || '').trim();
-              if (text) {
-                msgs.push({ role: 'assistant', text: text });
+              var txt = el.innerText.trim();
+              if (txt) {
+                msgs.push({ role: "assistant", text: txt });
               }
             });
           }
         }
         
-        return msgs;
+        var finalMsgs = [];
+        msgs.forEach(function(m) {
+          if (!m.text || m.text.trim().length < 2) return;
+          if (finalMsgs.length > 0) {
+            var last = finalMsgs[finalMsgs.length - 1];
+            if (last.role === m.role && last.text.trim() === m.text.trim()) {
+              return;
+            }
+            if (last.role === m.role) {
+              if (last.text.indexOf(m.text) !== -1) {
+                return;
+              }
+              if (m.text.indexOf(last.text) !== -1) {
+                last.text = m.text;
+                return;
+              }
+            }
+          }
+          finalMsgs.push(m);
+        });
+        return finalMsgs;
       }
       
       var msgs = extractMessages();
       if (msgs.length === 0) {
         var fullText = document.body.innerText;
-        msgs = [{ role: 'user', text: fullText }];
+        msgs = [{ role: "user", text: fullText }];
       }
       
-      var source = 'Unknown';
+      var source = "Unknown";
       var host = window.location.hostname;
-      if (host.indexOf('claude.ai') !== -1) source = 'Claude';
-      else if (host.indexOf('chatgpt') !== -1) source = 'ChatGPT';
-      else if (host.indexOf('gemini') !== -1) source = 'Gemini';
-      else if (host.indexOf('deepseek') !== -1) source = 'DeepSeek';
+      if (host.indexOf("claude.ai") !== -1) source = "Claude";
+      else if (host.indexOf("chatgpt") !== -1) source = "ChatGPT";
+      else if (host.indexOf("gemini") !== -1) source = "Gemini";
+      else if (host.indexOf("deepseek") !== -1) source = "DeepSeek";
       
       var title = document.title || (source + " Chat Import");
       var totalWords = 0;
-      msgs.forEach(function(m) { totalWords += (m.text || '').split(' ').length; });
+      msgs.forEach(function(m) { totalWords += (m.text || "").split(" ").length; });
       
       var payload = {
         source: source,
@@ -115,14 +171,14 @@ export default function BookmarkletSection() {
       var payloadStr = JSON.stringify(payload);
       var clipboardSuccess = true;
       try {
-        var el = document.createElement('textarea');
+        var el = document.createElement("textarea");
         el.value = payloadStr;
-        el.setAttribute('readonly', '');
-        el.style.position = 'absolute';
-        el.style.left = '-9999px';
+        el.setAttribute("readonly", "");
+        el.style.position = "absolute";
+        el.style.left = "-9999px";
         document.body.appendChild(el);
         el.select();
-        document.execCommand('copy');
+        document.execCommand("copy");
         document.body.removeChild(el);
       } catch (e) {
         try {
@@ -132,45 +188,89 @@ export default function BookmarkletSection() {
         }
       }
       
-      var existing = document.getElementById('context-bridge-modal');
+      var existing = document.getElementById("context-bridge-modal");
       if (existing) existing.remove();
       
-      var modal = document.createElement('div');
-      modal.id = 'context-bridge-modal';
-      modal.style.cssText = 'position:fixed;top:24px;right:24px;z-index:9999999;width:380px;background:#141414;border:1px solid #2b2b2b;border-radius:12px;padding:20px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);color:#e4e4e7;font-family:system-ui,-apple-system,sans-serif;text-align:left;box-sizing:border-box;';
+      var modal = document.createElement("div");
+      modal.id = "context-bridge-modal";
+      modal.style.cssText = "position:fixed;top:24px;right:24px;z-index:9999999;width:380px;background:#141414;border:1px solid #2b2b2b;border-radius:12px;padding:20px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);color:#e4e4e7;font-family:system-ui,-apple-system,sans-serif;text-align:left;box-sizing:border-box;";
       
-      var badgeBg = '#27272a';
-      if (source === 'Gemini') badgeBg = '#1e3a8a';
-      else if (source === 'Claude') badgeBg = '#7c2d12';
-      else if (source === 'ChatGPT') badgeBg = '#064e3b';
-      else if (source === 'DeepSeek') badgeBg = '#1e1b4b';
+      var badgeBg = "#27272a";
+      if (source === "Gemini") badgeBg = "#1e3a8a";
+      else if (source === "Claude") badgeBg = "#7c2d12";
+      else if (source === "ChatGPT") badgeBg = "#064e3b";
+      else if (source === "DeepSeek") badgeBg = "#1e1b4b";
 
-      modal.innerHTML = \'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #27272a;padding-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;background:\' + badgeBg + \';color:#ffffff;padding:2px 6px;border-radius:4px;">\' + source + \'</span><span style="font-size:12px;font-weight:bold;color:#a1a1aa;font-family:monospace;">Bridge Extract</span></div><button id="cb-close-btn" style="background:none;border:none;color:#71717a;cursor:pointer;font-size:20px;line-height:1;padding:4px;margin-left:auto;">&times;</button></div><h3 style="font-size:14px;font-weight:600;color:#ffffff;margin:0 0 8px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">\' + title + \'</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0d0d0d;padding:10px;border-radius:6px;border:1px solid #1f1f1f;margin-bottom:14px;text-align:center;"><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Turns</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">\' + msgs.length + \' msgs</strong></div><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Words</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">\' + totalWords.toLocaleString() + \'</strong></div></div><div style="margin-bottom:14px;">\' + (clipboardSuccess ? \'<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:#10b981;font-size:11px;padding:8px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;">✓ <strong>Auto-copied to clipboard!</strong></div>\' : \'<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#ef4444;font-size:11px;padding:8px 10px;border-radius:6px;">Auto-copy blocked. Please copy from text area.</div>\') + \'</div><div style="display:flex;flex-direction:column;gap:8px;"><a href="\' + origin + \'/?import_mode=clipboard&source=\' + source + \'&title=\' + encodeURIComponent(title) + \'" target="_blank" id="cb-launch-btn" style="display:block;text-align:center;background:#ffffff;color:#000000;text-decoration:none;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(255,255,255,0.1);">🚀 Open Bridge Workspace</a><button id="cb-toggle-json" style="background:none;border:none;color:#a1a1aa;cursor:pointer;font-size:11px;text-decoration:underline;padding:4px 0;align-self:center;">Show Raw JSON Payload</button><textarea id="cb-json-box" readonly style="display:none;width:100%;height:100px;background:#000000;color:#00ff66;font-family:monospace;font-size:10px;border:1px solid #27272a;border-radius:4px;padding:6px;box-sizing:border-box;resize:none;margin-top:6px;">\' + payloadStr.split("\'").join("\\\\\'") + \'</textarea></div>\';
+      var mdTranscript = msgs.map(function(m) {
+        var speaker = m.role === "user" ? "### 👤 HUMAN / USER" : "### 🤖 AI ASSISTANT (" + source + ")";
+        return speaker + "\\n\\n" + m.text + "\\n\\n---\\n";
+      }).join("\\n");
+
+      function copyText(text) {
+        var success = true;
+        try {
+          var el = document.createElement("textarea");
+          el.value = text;
+          el.setAttribute("readonly", "");
+          el.style.position = "absolute";
+          el.style.left = "-9999px";
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand("copy");
+          document.body.removeChild(el);
+        } catch (e) {
+          try {
+            navigator.clipboard.writeText(text);
+          } catch (e2) {
+            success = false;
+          }
+        }
+        return success;
+      }
+
+      modal.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #27272a;padding-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;background:' + badgeBg + ';color:#ffffff;padding:2px 6px;border-radius:4px;">' + source + '</span><span style="font-size:12px;font-weight:bold;color:#a1a1aa;font-family:monospace;">Bridge Extract</span></div><button id="cb-close-btn" style="background:none;border:none;color:#71717a;cursor:pointer;font-size:20px;line-height:1;padding:4px;margin-left:auto;">&times;</button></div><h3 style="font-size:14px;font-weight:600;color:#ffffff;margin:0 0 8px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + title + '</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0d0d0d;padding:10px;border-radius:6px;border:1px solid #1f1f1f;margin-bottom:14px;text-align:center;"><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Turns</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">' + msgs.length + ' msgs</strong></div><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Words</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">' + totalWords.toLocaleString() + '</strong></div></div><div style="margin-bottom:14px;">' + (clipboardSuccess ? '<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:#10b981;font-size:11px;padding:8px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;">✓ <strong>Auto-copied JSON to clipboard!</strong></div>' : '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#ef4444;font-size:11px;padding:8px 10px;border-radius:6px;">Auto-copy blocked. Please copy from text area.</div>') + '</div><div style="display:flex;flex-direction:column;gap:8px;"><a href="' + origin + '/?import_mode=clipboard&source=' + source + '&title=' + encodeURIComponent(title) + '" target="_blank" id="cb-launch-btn" style="display:block;text-align:center;background:#ffffff;color:#000000;text-decoration:none;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(255,255,255,0.1);">🚀 Open Bridge Workspace</a><button id="cb-copy-md-btn" style="display:block;width:100%;text-align:center;background:#18181b;color:#ffffff;border:1px solid #27272a;cursor:pointer;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);transition:all 0.2s;">📋 Copy Clean Transcript</button><button id="cb-toggle-json" style="background:none;border:none;color:#a1a1aa;cursor:pointer;font-size:11px;text-decoration:underline;padding:4px 0;align-self:center;">Show Raw JSON Payload</button><textarea id="cb-json-box" readonly style="display:none;width:100%;height:100px;background:#000000;color:#00ff66;font-family:monospace;font-size:10px;border:1px solid #27272a;border-radius:4px;padding:6px;box-sizing:border-box;resize:none;margin-top:6px;">' + payloadStr.replace(new RegExp("</textarea>", "gi"), "&lt;/textarea&gt;") + '</textarea></div>';
       
       document.body.appendChild(modal);
       
-      document.getElementById(\'cb-close-btn\').onclick = function() {
+      document.getElementById("cb-close-btn").onclick = function() {
         modal.remove();
       };
-      
-      var jsonBox = document.getElementById(\'cb-json-box\');
-      document.getElementById(\'cb-toggle-json\').onclick = function() {
-        if (jsonBox.style.display === \'none\') {
-          jsonBox.style.display = \'block\';
-          this.innerText = \'Hide Raw JSON Payload\';
+
+      document.getElementById("cb-copy-md-btn").onclick = function() {
+        var copySuccess = copyText(mdTranscript);
+        var btn = this;
+        if (copySuccess) {
+          btn.innerText = "✓ Transcript Copied!";
+          btn.style.background = "#064e3b";
+          btn.style.color = "#ffffff";
+          setTimeout(function() {
+            btn.innerText = "📋 Copy Clean Transcript";
+            btn.style.background = "#18181b";
+          }, 2000);
         } else {
-          jsonBox.style.display = \'none\';
-          this.innerText = \'Show Raw JSON Payload\';
+          btn.innerText = "❌ Copy Failed";
+          btn.style.background = "#991b1b";
+        }
+      };
+      
+      var jsonBox = document.getElementById("cb-json-box");
+      document.getElementById("cb-toggle-json").onclick = function() {
+        if (jsonBox.style.display === "none") {
+          jsonBox.style.display = "block";
+          this.innerText = "Hide Raw JSON Payload";
+        } else {
+          jsonBox.style.display = "none";
+          this.innerText = "Show Raw JSON Payload";
         }
       };
     })()`;
 
-    // Minify it to make it a safe single-line bookmarklet
+    // Minify safely and reliably without breaking strings or statements
     const minified = rawJS
-      .replace(/\s+/g, ' ')
-      .replace(/{\s+/g, '{')
-      .replace(/;\s+/g, ';')
-      .trim();
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join(' ');
     return `javascript:${encodeURIComponent(minified)}`;
   };
 
@@ -187,7 +287,7 @@ export default function BookmarkletSection() {
   }, []);
 
   return (
-    <div className="bg-stone-900/50 backdrop-blur-md rounded-xl border border-stone-800 p-6 md:p-8 shadow-xl">
+    <div className="bg-stone-900/50 backdrop-blur-md rounded-xl border border-stone-800 p-6 md:p-8 shadow-xl animate-fade-in">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
         <div>
           <div className="flex items-center gap-2 mb-2">
