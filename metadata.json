@@ -1,0 +1,6 @@
+{
+  "name": "Chat Context Bridge",
+  "description": "Easily import your AI chat transcripts from Claude, ChatGPT, Gemini, and more into any other AI. Use our 1-click Bookmarklet or AI-powered paste parsing to seamlessly carry your context over.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
