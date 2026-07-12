@@ -13,21 +13,26 @@ export default function BookmarkletSection() {
       function isElementInSidebar(el) {
         var current = el;
         while (current && current !== document.body) {
+          var tag = current.tagName.toLowerCase();
           var id = (current.id || "").toLowerCase();
           var cls = (current.className || "");
           if (typeof cls === "object") {
             cls = cls.baseVal || "";
           }
           cls = cls.toLowerCase();
-          var tag = current.tagName.toLowerCase();
           
-          if (tag === "nav" || tag === "aside") {
+          if (tag === "main") {
+            return false;
+          }
+          if (tag === "nav" || tag === "aside" || current.getAttribute("role") === "navigation") {
             return true;
           }
-          if (id.indexOf("sidebar") !== -1 || id.indexOf("nav") !== -1 || id.indexOf("history") !== -1 || id.indexOf("menu") !== -1 || id.indexOf("left-panel") !== -1) {
+          var isSidebarWord = id.indexOf("sidebar") !== -1 || cls.indexOf("sidebar") !== -1;
+          var isLayoutOrToggle = cls.indexOf("layout") !== -1 || cls.indexOf("open") !== -1 || cls.indexOf("closed") !== -1 || cls.indexOf("toggle") !== -1 || cls.indexOf("button") !== -1 || cls.indexOf("btn") !== -1 || id.indexOf("toggle") !== -1;
+          if (isSidebarWord && !isLayoutOrToggle) {
             return true;
           }
-          if (cls.indexOf("sidebar") !== -1 || cls.indexOf("nav") !== -1 || cls.indexOf("history") !== -1 || cls.indexOf("menu") !== -1 || cls.indexOf("left-panel") !== -1 || cls.indexOf("drawer") !== -1 || cls.indexOf("aside") !== -1) {
+          if (id.indexOf("history-panel") !== -1 || cls.indexOf("history-panel") !== -1 || id.indexOf("left-panel") !== -1) {
             return true;
           }
           current = current.parentElement;
@@ -87,9 +92,48 @@ export default function BookmarkletSection() {
         }
       }
 
+      function scoreMessageArray(msgs) {
+        if (!msgs || msgs.length === 0) return 0;
+        var score = msgs.length;
+        var hasUser = false;
+        var hasAssistant = false;
+        var alternations = 0;
+        var containsSuggestions = false;
+        for (var i = 0; i < msgs.length; i++) {
+          var m = msgs[i];
+          if (m.role === "user") hasUser = true;
+          if (m.role === "assistant") hasAssistant = true;
+          if (i > 0 && msgs[i].role !== msgs[i-1].role) {
+            alternations++;
+          }
+          if (
+            m.text && (
+              m.text.indexOf("short story about a morning commute") !== -1 ||
+              m.text.indexOf("sustainable fashion trends") !== -1 ||
+              m.text.indexOf("wireless headphones") !== -1 ||
+              m.text.indexOf("sky changes color at sunset") !== -1 ||
+              m.text.indexOf("wrong item in their order") !== -1 ||
+              m.text.indexOf("Write the opening of a short story") !== -1
+            )
+          ) {
+            containsSuggestions = true;
+          }
+        }
+        if (hasUser && hasAssistant) score += 20;
+        score += alternations * 5;
+        if (!hasUser || !hasAssistant) {
+          score -= 50;
+        }
+        if (containsSuggestions) {
+          score -= 1000;
+        }
+        return score;
+      }
+
       function extractFromReactMemory() {
         var visited = new Set();
         var bestArray = null;
+        var bestScore = -9999;
 
         function parseReactMessage(item) {
           var role = "assistant";
@@ -185,7 +229,19 @@ export default function BookmarkletSection() {
           try {
             if (Array.isArray(obj)) {
               if (obj.length > 0 && isMessageArray(obj)) {
-                if (!bestArray || obj.length > bestArray.length) {
+                var parsedMsgs = [];
+                obj.forEach(function(item) {
+                  try {
+                    var parsed = parseReactMessage(item);
+                    var txt = cleanText(parsed.text);
+                    if (txt && txt.length > 1) {
+                      parsedMsgs.push({ role: parsed.role, text: txt });
+                    }
+                  } catch(e) {}
+                });
+                var score = scoreMessageArray(parsedMsgs);
+                if (score > bestScore) {
+                  bestScore = score;
                   bestArray = obj;
                 }
               }
@@ -254,50 +310,45 @@ export default function BookmarkletSection() {
                 var curr = el[key];
                 while (curr) {
                   checkFiber(curr);
-                  if (bestArray && bestArray.length > 200) break;
                   curr = curr.return;
                 }
               } catch(e) {}
             }
           }
-          if (bestArray && bestArray.length > 200) break;
         }
 
         // 2. Fallback: Walk DOWN from common roots
-        if (!bestArray) {
-          var roots = [
-            document.querySelector("#root"),
-            document.querySelector("#app"),
-            document.querySelector("main"),
-            document.body
-          ];
-          roots.forEach(function(root) {
-            if (!root) return;
-            try {
-              var els = root.querySelectorAll("*");
-              checkElement(root);
-              for (var i = 0; i < els.length; i++) {
-                if (bestArray && bestArray.length > 200) break;
-                checkElement(els[i]);
-              }
-            } catch(e) {}
-          });
+        var roots = [
+          document.querySelector("#root"),
+          document.querySelector("#app"),
+          document.querySelector("main"),
+          document.body
+        ];
+        roots.forEach(function(root) {
+          if (!root) return;
+          try {
+            var els = root.querySelectorAll("*");
+            checkElement(root);
+            for (var i = 0; i < els.length; i++) {
+              checkElement(els[i]);
+            }
+          } catch(e) {}
+        });
 
-          function checkElement(el) {
-            if (!el) return;
-            var keys = Object.keys(el);
-            for (var j = 0; j < keys.length; j++) {
-              var key = keys[j];
-              if (
-                key.indexOf("__reactFiber$") === 0 || 
-                key.indexOf("__reactProps$") === 0 || 
-                key.indexOf("__reactContainer$") === 0 ||
-                key.indexOf("__reactInternalInstance$") === 0
-              ) {
-                try {
-                  walk(el[key], 0);
-                } catch(e) {}
-              }
+        function checkElement(el) {
+          if (!el) return;
+          var keys = Object.keys(el);
+          for (var j = 0; j < keys.length; j++) {
+            var key = keys[j];
+            if (
+              key.indexOf("__reactFiber$") === 0 || 
+              key.indexOf("__reactProps$") === 0 || 
+              key.indexOf("__reactContainer$") === 0 ||
+              key.indexOf("__reactInternalInstance$") === 0
+            ) {
+              try {
+                walk(el[key], 0);
+              } catch(e) {}
             }
           }
         }
@@ -340,10 +391,16 @@ export default function BookmarkletSection() {
         var host = window.location.hostname;
         
         if (host.indexOf("claude.ai") !== -1) {
-          var elems = document.querySelectorAll("[data-testid='user-message'], [data-testid='assistant-message'], .font-user-message, .font-claude-message");
+          var elems = document.querySelectorAll("[data-testid*='message'], .font-user-message, .font-claude-message, [class*='font-user'], [class*='font-claude'], .prose");
+          if (elems.length === 0) {
+            elems = document.querySelectorAll("[class*='user-message'], [class*='assistant-message'], [class*='ChatMessage'], .prose");
+          }
           elems.forEach(function(el) {
             if (isElementInSidebar(el)) return;
-            var isUser = el.getAttribute("data-testid") === "user-message" || el.classList.contains("font-user-message");
+            var isUser = el.getAttribute("data-testid") === "user-message" || 
+                         el.classList.contains("font-user-message") || 
+                         (el.className && el.className.indexOf("font-user") !== -1) ||
+                         (el.className && el.className.indexOf("user-message") !== -1);
             var txt = getTextWithoutActions(el);
             txt = cleanText(txt);
             if (txt) {
@@ -517,9 +574,9 @@ export default function BookmarkletSection() {
           console.error("React extraction failed:", e);
         }
 
-        // Compare and use whichever extracted MORE valid messages!
+        // Compare and use whichever extracted the higher-scored message list!
         var best = domMsgs;
-        if (memMsgs.length > domMsgs.length) {
+        if (scoreMessageArray(memMsgs) > scoreMessageArray(domMsgs)) {
           best = memMsgs;
         }
 
