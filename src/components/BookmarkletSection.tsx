@@ -10,18 +10,344 @@ export default function BookmarkletSection() {
   const getBookmarkletCode = () => {
     const origin = window.location.origin;
     const rawJS = `(function(){
+      function isElementInSidebar(el) {
+        var current = el;
+        while (current && current !== document.body) {
+          var id = (current.id || "").toLowerCase();
+          var cls = (current.className || "");
+          if (typeof cls === "object") {
+            cls = cls.baseVal || "";
+          }
+          cls = cls.toLowerCase();
+          var tag = current.tagName.toLowerCase();
+          
+          if (tag === "nav" || tag === "aside") {
+            return true;
+          }
+          if (id.indexOf("sidebar") !== -1 || id.indexOf("nav") !== -1 || id.indexOf("history") !== -1 || id.indexOf("menu") !== -1 || id.indexOf("left-panel") !== -1) {
+            return true;
+          }
+          if (cls.indexOf("sidebar") !== -1 || cls.indexOf("nav") !== -1 || cls.indexOf("history") !== -1 || cls.indexOf("menu") !== -1 || cls.indexOf("left-panel") !== -1 || cls.indexOf("drawer") !== -1 || cls.indexOf("aside") !== -1) {
+            return true;
+          }
+          current = current.parentElement;
+        }
+        return false;
+      }
+
+      function cleanText(text) {
+        if (!text) return "";
+        var lines = text.split("\n");
+        var filteredLines = lines.filter(function(line) {
+          var l = line.trim().toLowerCase();
+          if (l.indexOf("use the up and down arrow keys") !== -1) return false;
+          if (l.indexOf("load earlier messages") !== -1) return false;
+          if (l === "copy code") return false;
+          if (l === "copy to clipboard") return false;
+          if (l === "copy link") return false;
+          if (l === "was this response helpful?") return false;
+          if (l === "regenerate") return false;
+          if (l === "regenerate response") return false;
+          return true;
+        });
+        
+        var cleaned = filteredLines.join("\n").trim();
+        cleaned = cleaned.replace(/Use the up and down arrow keys to move between messages\.?/gi, "");
+        cleaned = cleaned.replace(/Load earlier messages\.?/gi, "");
+        return cleaned.trim();
+      }
+
+      function getTextWithoutActions(el) {
+        if (!el) return "";
+        try {
+          var clone = el.cloneNode(true);
+          var selectorsToRemove = [
+            "button",
+            "svg",
+            "style",
+            "script",
+            "model-feedback",
+            ".ds-message-actions",
+            ".ds-feedback",
+            "[class*='message-actions']",
+            "[class*='response-actions']",
+            "[class*='feedback-actions']"
+          ];
+          selectorsToRemove.forEach(function(sel) {
+            try {
+              var items = clone.querySelectorAll(sel);
+              items.forEach(function(item) {
+                item.remove();
+              });
+            } catch(e) {}
+          });
+          return clone.innerText || clone.textContent || "";
+        } catch(e) {
+          return el.innerText || el.textContent || "";
+        }
+      }
+
+      function extractFromReactMemory() {
+        var visited = new Set();
+        var bestArray = null;
+
+        function parseReactMessage(item) {
+          var role = "assistant";
+          var text = "";
+          if (!item || typeof item !== "object") return { role: role, text: text };
+
+          try {
+            if (item.role) {
+              var r = item.role.toString().toLowerCase();
+              if (r.indexOf("user") !== -1 || r === "human") role = "user";
+            } else if (item.sender) {
+              var s = item.sender.toString().toLowerCase();
+              if (s.indexOf("user") !== -1 || s === "human") role = "user";
+            } else if (item.author) {
+              var a = "";
+              if (typeof item.author === "string") {
+                a = item.author;
+              } else if (item.author.role) {
+                a = item.author.role;
+              } else if (item.author.name) {
+                a = item.author.name;
+              }
+              if (a.toLowerCase().indexOf("user") !== -1 || a.toLowerCase().indexOf("human") !== -1) role = "user";
+            } else if (item.sender_type) {
+              var st = item.sender_type.toString().toLowerCase();
+              if (st.indexOf("user") !== -1 || st === "human") role = "user";
+            }
+
+            if (typeof item.text === "string") {
+              text = item.text;
+            } else if (typeof item.content === "string") {
+              text = item.content;
+            } else if (Array.isArray(item.parts)) {
+              text = item.parts.map(function(p) {
+                if (typeof p === "string") return p;
+                if (p && typeof p === "object" && p.text) return p.text;
+                return "";
+              }).join("\n");
+            } else if (item.content && typeof item.content === "object") {
+              if (Array.isArray(item.content)) {
+                text = item.content.map(function(c) {
+                  if (typeof c === "string") return c;
+                  if (c && typeof c === "object") {
+                    if (c.text) return c.text;
+                    if (c.type === "text" && c.text) return c.text;
+                  }
+                  return "";
+                }).join("\n");
+              } else if (Array.isArray(item.content.parts)) {
+                text = item.content.parts.filter(function(p) { return typeof p === "string"; }).join("\n");
+              } else if (item.content.text) {
+                text = item.content.text;
+              } else {
+                text = JSON.stringify(item.content);
+              }
+            } else if (item.message) {
+              text = typeof item.message === "string" ? item.message : (item.message.text || JSON.stringify(item.message));
+            } else if (item.text_content) {
+              text = item.text_content;
+            } else if (item.message_text) {
+              text = item.message_text;
+            }
+          } catch (e) {}
+
+          return { role: role, text: text };
+        }
+
+        function isMessageArray(arr) {
+          if (!Array.isArray(arr) || arr.length === 0) return false;
+          var matchCount = 0;
+          var sampleSize = Math.min(arr.length, 3);
+          for (var i = 0; i < sampleSize; i++) {
+            var item = arr[i];
+            if (item && typeof item === "object") {
+              try {
+                var parsed = parseReactMessage(item);
+                if (parsed.text && parsed.text.length > 0) {
+                  matchCount++;
+                }
+              } catch(e) {}
+            }
+          }
+          return matchCount > 0 && matchCount === sampleSize;
+        }
+
+        function walk(obj, depth) {
+          if (!obj || depth > 20) return;
+          try {
+            if (visited.has(obj)) return;
+            visited.add(obj);
+          } catch(e) { return; }
+
+          try {
+            if (Array.isArray(obj)) {
+              if (obj.length > 0 && isMessageArray(obj)) {
+                if (!bestArray || obj.length > bestArray.length) {
+                  bestArray = obj;
+                }
+              }
+              for (var i = 0; i < Math.min(obj.length, 50); i++) {
+                if (obj[i] && typeof obj[i] === "object") {
+                  walk(obj[i], depth + 1);
+                }
+              }
+            } else if (typeof obj === "object" && obj !== null) {
+              if (obj instanceof Element || (obj.constructor && obj.constructor.name === "FiberNode")) return;
+              var keys = Object.keys(obj);
+              for (var i = 0; i < keys.length; i++) {
+                var key = keys[i];
+                if (
+                  key === "stateNode" || 
+                  key === "child" || 
+                  key === "sibling" || 
+                  key === "return" || 
+                  key === "alternate" ||
+                  key === "next" ||
+                  key.indexOf("__react") === 0
+                ) {
+                  continue;
+                }
+                var val = obj[key];
+                if (val && typeof val === "object") {
+                  walk(val, depth + 1);
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        function checkFiber(fiber) {
+          if (!fiber) return;
+          
+          if (fiber.memoizedProps) {
+            walk(fiber.memoizedProps, 0);
+          }
+          if (fiber.pendingProps) {
+            walk(fiber.pendingProps, 0);
+          }
+          
+          var hook = fiber.memoizedState;
+          while (hook && typeof hook === "object") {
+            if (hook.memoizedState !== undefined) {
+              walk(hook.memoizedState, 0);
+            }
+            hook = hook.next;
+          }
+        }
+
+        // 1. Walk UP from message-like DOM elements first
+        var msgEls = document.querySelectorAll("[data-testid*='message'], [class*='message'], [class*='Message'], .font-claude-message, .prose, .chat-message");
+        for (var i = 0; i < msgEls.length; i++) {
+          var el = msgEls[i];
+          var keys = Object.keys(el);
+          for (var j = 0; j < keys.length; j++) {
+            var key = keys[j];
+            if (
+              key.indexOf("__reactFiber$") === 0 || 
+              key.indexOf("__reactInternalInstance$") === 0 ||
+              key.indexOf("__reactProps$") === 0
+            ) {
+              try {
+                var curr = el[key];
+                while (curr) {
+                  checkFiber(curr);
+                  if (bestArray && bestArray.length > 200) break;
+                  curr = curr.return;
+                }
+              } catch(e) {}
+            }
+          }
+          if (bestArray && bestArray.length > 200) break;
+        }
+
+        // 2. Fallback: Walk DOWN from common roots
+        if (!bestArray) {
+          var roots = [
+            document.querySelector("#root"),
+            document.querySelector("#app"),
+            document.querySelector("main"),
+            document.body
+          ];
+          roots.forEach(function(root) {
+            if (!root) return;
+            try {
+              var els = root.querySelectorAll("*");
+              checkElement(root);
+              for (var i = 0; i < els.length; i++) {
+                if (bestArray && bestArray.length > 200) break;
+                checkElement(els[i]);
+              }
+            } catch(e) {}
+          });
+
+          function checkElement(el) {
+            if (!el) return;
+            var keys = Object.keys(el);
+            for (var j = 0; j < keys.length; j++) {
+              var key = keys[j];
+              if (
+                key.indexOf("__reactFiber$") === 0 || 
+                key.indexOf("__reactProps$") === 0 || 
+                key.indexOf("__reactContainer$") === 0 ||
+                key.indexOf("__reactInternalInstance$") === 0
+              ) {
+                try {
+                  walk(el[key], 0);
+                } catch(e) {}
+              }
+            }
+          }
+        }
+
+        if (bestArray) {
+          var resMsgs = [];
+          bestArray.forEach(function(item) {
+            try {
+              var parsed = parseReactMessage(item);
+              var txt = cleanText(parsed.text);
+              if (txt && txt.length > 1) {
+                resMsgs.push({ role: parsed.role, text: txt });
+              }
+            } catch(e) {}
+          });
+          if (resMsgs.length > 0) return resMsgs;
+        }
+        return null;
+      }
+
       function extractMessages() {
-        var msgs = [];
+        /* Auto-click "Load earlier messages" or similar buttons to try and load them automatically */
+        try {
+          var loadButtons = document.querySelectorAll("button, a, [role='button'], .load-more-btn");
+          loadButtons.forEach(function(btn) {
+            var text = (btn.innerText || btn.textContent || "").toLowerCase();
+            if (
+              text.indexOf("load earlier") !== -1 ||
+              text.indexOf("load more") !== -1 ||
+              text.indexOf("show earlier") !== -1 ||
+              text.indexOf("show more messages") !== -1 ||
+              text.indexOf("earlier messages") !== -1
+            ) {
+              btn.click();
+            }
+          });
+        } catch(e) {}
+
+        var domMsgs = [];
         var host = window.location.hostname;
         
         if (host.indexOf("claude.ai") !== -1) {
           var elems = document.querySelectorAll("[data-testid='user-message'], [data-testid='assistant-message'], .font-user-message, .font-claude-message");
           elems.forEach(function(el) {
+            if (isElementInSidebar(el)) return;
             var isUser = el.getAttribute("data-testid") === "user-message" || el.classList.contains("font-user-message");
-            var txt = el.innerText || el.textContent || "";
-            txt = txt.trim();
+            var txt = getTextWithoutActions(el);
+            txt = cleanText(txt);
             if (txt) {
-              msgs.push({ role: isUser ? "user" : "assistant", text: txt });
+              domMsgs.push({ role: isUser ? "user" : "assistant", text: txt });
             }
           });
         } 
@@ -29,31 +355,42 @@ export default function BookmarkletSection() {
           var elems = document.querySelectorAll("[data-message-author-role='user'], [data-message-author-role='assistant']");
           if (elems.length > 0) {
             elems.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
               var role = el.getAttribute("data-message-author-role");
-              var txt = el.innerText || el.textContent || "";
-              txt = txt.trim();
+              var txt = getTextWithoutActions(el);
+              txt = cleanText(txt);
               if (txt) {
-                msgs.push({ role: role === "user" ? "user" : "assistant", text: txt });
+                domMsgs.push({ role: role === "user" ? "user" : "assistant", text: txt });
               }
             });
           } else {
             var turns = document.querySelectorAll("[data-testid^='conversation-turn']");
             if (turns.length > 0) {
               turns.forEach(function(turn) {
+                if (isElementInSidebar(turn)) return;
                 var userBlock = turn.querySelector("[data-testid^='user-message']");
                 var assistBlock = turn.querySelector(".prose");
                 if (userBlock) {
-                  msgs.push({ role: "user", text: userBlock.innerText.trim() });
+                  var uTxt = getTextWithoutActions(userBlock);
+                  uTxt = cleanText(uTxt);
+                  if (uTxt) domMsgs.push({ role: "user", text: uTxt });
                 }
                 if (assistBlock) {
-                  msgs.push({ role: "assistant", text: assistBlock.innerText.trim() });
+                  var aTxt = getTextWithoutActions(assistBlock);
+                  aTxt = cleanText(aTxt);
+                  if (aTxt) domMsgs.push({ role: "assistant", text: aTxt });
                 }
               });
             } else {
               var messages = document.querySelectorAll(".whitespace-pre-wrap, .prose");
               messages.forEach(function(el) {
+                if (isElementInSidebar(el)) return;
                 var isUser = el.closest("[data-testid^='user-message']") || !el.classList.contains("prose");
-                msgs.push({ role: isUser ? "user" : "assistant", text: el.innerText.trim() });
+                var txt = getTextWithoutActions(el);
+                txt = cleanText(txt);
+                if (txt) {
+                  domMsgs.push({ role: isUser ? "user" : "assistant", text: txt });
+                }
               });
             }
           }
@@ -62,26 +399,75 @@ export default function BookmarkletSection() {
           var units = document.querySelectorAll("user-query, model-response, [class*='message-loop-and-turn']");
           if (units.length > 0) {
             units.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
               var isUser = el.tagName.toLowerCase() === "user-query" || el.classList.contains("query-content");
               var txt = "";
               if (isUser) {
-                txt = el.innerText || el.textContent || "";
+                txt = getTextWithoutActions(el);
               } else {
                 var contentEl = el.querySelector(".message-content, .markdown, .model-response-text");
-                txt = (contentEl || el).innerText || (contentEl || el).textContent || "";
+                txt = getTextWithoutActions(contentEl || el);
               }
-              txt = txt.trim();
+              txt = cleanText(txt);
               if (txt) {
-                msgs.push({ role: isUser ? "user" : "assistant", text: txt });
+                domMsgs.push({ role: isUser ? "user" : "assistant", text: txt });
               }
             });
           } else {
             var queryElems = document.querySelectorAll(".query-content, .message-content");
             queryElems.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
               var isUser = el.classList.contains("query-content") || el.closest("user-query");
-              var txt = el.innerText.trim();
+              var txt = getTextWithoutActions(el);
+              txt = cleanText(txt);
               if (txt) {
-                msgs.push({ role: isUser ? "user" : "assistant", text: txt });
+                domMsgs.push({ role: isUser ? "user" : "assistant", text: txt });
+              }
+            });
+          }
+        }
+        else if (host.indexOf("deepseek.com") !== -1) {
+          var messages = document.querySelectorAll(".ds-message, [class*='ds-message'], [class*='message-item']");
+          if (messages.length > 0) {
+            messages.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
+              var markdownEl = el.querySelector(".ds-markdown, [class*='ds-markdown']");
+              if (markdownEl) {
+                var txt = getTextWithoutActions(markdownEl);
+                txt = cleanText(txt);
+                if (txt) {
+                  domMsgs.push({ role: "assistant", text: txt });
+                }
+              } else {
+                var userTextEl = el.querySelector("[class*='user-message'], [class*='user-text'], [class*='text-content']");
+                var txt = getTextWithoutActions(userTextEl || el);
+                txt = cleanText(txt);
+                if (txt) {
+                  domMsgs.push({ role: "user", text: txt });
+                }
+              }
+            });
+          } else {
+            var mdBlocks = document.querySelectorAll(".ds-markdown, [class*='ds-markdown']");
+            mdBlocks.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
+              var txt = getTextWithoutActions(el);
+              txt = cleanText(txt);
+              if (txt) {
+                var prev = el.parentElement;
+                while (prev) {
+                  var prevSib = prev.previousElementSibling;
+                  if (prevSib) {
+                    var userTxt = getTextWithoutActions(prevSib);
+                    userTxt = cleanText(userTxt);
+                    if (userTxt && !prevSib.querySelector(".ds-markdown, [class*='ds-markdown']")) {
+                      domMsgs.push({ role: "user", text: userTxt });
+                      break;
+                    }
+                  }
+                  prev = prev.parentElement;
+                }
+                domMsgs.push({ role: "assistant", text: txt });
               }
             });
           }
@@ -93,6 +479,7 @@ export default function BookmarkletSection() {
           }
           if (elems.length > 0) {
             elems.forEach(function(el) {
+              if (isElementInSidebar(el)) return;
               var role = "assistant";
               var roleAttr = el.getAttribute("data-message-author-role");
               if (roleAttr) {
@@ -104,25 +491,40 @@ export default function BookmarkletSection() {
                   role = "user";
                 }
               }
-              var txt = el.innerText || el.textContent || "";
-              txt = txt.trim();
+              var txt = getTextWithoutActions(el);
+              txt = cleanText(txt);
               if (txt) {
-                msgs.push({ role: role, text: txt });
+                domMsgs.push({ role: role, text: txt });
               }
             });
           } else {
             var mdBlocks = document.querySelectorAll(".markdown, .prose, pre, code");
             mdBlocks.forEach(function(el) {
-              var txt = el.innerText.trim();
+              if (isElementInSidebar(el)) return;
+              var txt = getTextWithoutActions(el);
+              txt = cleanText(txt);
               if (txt) {
-                msgs.push({ role: "assistant", text: txt });
+                domMsgs.push({ role: "assistant", text: txt });
               }
             });
           }
         }
-        
+
+        var memMsgs = [];
+        try {
+          memMsgs = extractFromReactMemory() || [];
+        } catch(e) {
+          console.error("React extraction failed:", e);
+        }
+
+        // Compare and use whichever extracted MORE valid messages!
+        var best = domMsgs;
+        if (memMsgs.length > domMsgs.length) {
+          best = memMsgs;
+        }
+
         var finalMsgs = [];
-        msgs.forEach(function(m) {
+        best.forEach(function(m) {
           if (!m.text || m.text.trim().length < 2) return;
           if (finalMsgs.length > 0) {
             var last = finalMsgs[finalMsgs.length - 1];
@@ -146,7 +548,13 @@ export default function BookmarkletSection() {
       
       var msgs = extractMessages();
       if (msgs.length === 0) {
-        var fullText = document.body.innerText;
+        var bodyClone = document.body.cloneNode(true);
+        var sidebars = bodyClone.querySelectorAll("nav, aside, [id*='sidebar'], [id*='nav'], [id*='menu'], [class*='sidebar'], [class*='nav'], [class*='menu'], [class*='history'], [class*='left-panel']");
+        sidebars.forEach(function(sb) {
+          sb.remove();
+        });
+        var fullText = bodyClone.innerText || bodyClone.textContent || "";
+        fullText = fullText.trim();
         msgs = [{ role: "user", text: fullText }];
       }
       
@@ -228,12 +636,162 @@ export default function BookmarkletSection() {
         return success;
       }
 
-      modal.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #27272a;padding-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;background:' + badgeBg + ';color:#ffffff;padding:2px 6px;border-radius:4px;">' + source + '</span><span style="font-size:12px;font-weight:bold;color:#a1a1aa;font-family:monospace;">Bridge Extract</span></div><button id="cb-close-btn" style="background:none;border:none;color:#71717a;cursor:pointer;font-size:20px;line-height:1;padding:4px;margin-left:auto;">&times;</button></div><h3 style="font-size:14px;font-weight:600;color:#ffffff;margin:0 0 8px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + title + '</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0d0d0d;padding:10px;border-radius:6px;border:1px solid #1f1f1f;margin-bottom:14px;text-align:center;"><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Turns</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">' + msgs.length + ' msgs</strong></div><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Words</span><strong style="font-size:12px;color:#e4e4e7;font-weight:500;">' + totalWords.toLocaleString() + '</strong></div></div><div style="margin-bottom:14px;">' + (clipboardSuccess ? '<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:#10b981;font-size:11px;padding:8px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;">✓ <strong>Auto-copied JSON to clipboard!</strong></div>' : '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#ef4444;font-size:11px;padding:8px 10px;border-radius:6px;">Auto-copy blocked. Please copy from text area.</div>') + '</div><div style="display:flex;flex-direction:column;gap:8px;"><a href="' + origin + '/?import_mode=clipboard&source=' + source + '&title=' + encodeURIComponent(title) + '" target="_blank" id="cb-launch-btn" style="display:block;text-align:center;background:#ffffff;color:#000000;text-decoration:none;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(255,255,255,0.1);">🚀 Open Bridge Workspace</a><button id="cb-copy-md-btn" style="display:block;width:100%;text-align:center;background:#18181b;color:#ffffff;border:1px solid #27272a;cursor:pointer;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);transition:all 0.2s;">📋 Copy Clean Transcript</button><button id="cb-toggle-json" style="background:none;border:none;color:#a1a1aa;cursor:pointer;font-size:11px;text-decoration:underline;padding:4px 0;align-self:center;">Show Raw JSON Payload</button><textarea id="cb-json-box" readonly style="display:none;width:100%;height:100px;background:#000000;color:#00ff66;font-family:monospace;font-size:10px;border:1px solid #27272a;border-radius:4px;padding:6px;box-sizing:border-box;resize:none;margin-top:6px;">' + payloadStr.replace(new RegExp("</textarea>", "gi"), "&lt;/textarea&gt;") + '</textarea></div>';
+      function findScrollContainer() {
+        var messageEl = document.querySelector("[data-testid*='message'], .font-claude-message, .prose, [class*='message']");
+        if (!messageEl) return window;
+        var parent = messageEl.parentElement;
+        while (parent && parent !== document.body) {
+          var style = window.getComputedStyle(parent);
+          if ((style.overflowY === "auto" || style.overflowY === "scroll") && parent.scrollHeight > parent.clientHeight) {
+            return parent;
+          }
+          parent = parent.parentElement;
+        }
+        return window;
+      }
+
+      function mergeBatches(accumulated, newBatch) {
+        if (accumulated.length === 0) return newBatch;
+        if (newBatch.length === 0) return accumulated;
+        
+        var overlapIndex = -1;
+        for (var i = 0; i < newBatch.length; i++) {
+          var match = true;
+          var matchLen = Math.min(newBatch.length - i, accumulated.length);
+          for (var k = 0; k < matchLen; k++) {
+            if (newBatch[i + k].role !== accumulated[k].role || newBatch[i + k].text.trim() !== accumulated[k].text.trim()) {
+              match = false;
+              break;
+            }
+          }
+          if (match && matchLen > 0) {
+            overlapIndex = i;
+            break;
+          }
+        }
+        
+        if (overlapIndex !== -1) {
+          return newBatch.slice(0, overlapIndex).concat(accumulated);
+        } else {
+          var filteredNew = newBatch.filter(function(n) {
+            return !accumulated.some(function(a) {
+              return a.role === n.role && a.text.trim() === n.text.trim();
+            });
+          });
+          return filteredNew.concat(accumulated);
+        }
+      }
+
+      function updateModalData(currentMsgs) {
+        var words = 0;
+        currentMsgs.forEach(function(m) { words += (m.text || "").split(" ").length; });
+        
+        var turnsEl = document.getElementById("cb-turns");
+        if (turnsEl) turnsEl.innerText = currentMsgs.length + " msgs";
+        
+        var wordsEl = document.getElementById("cb-words");
+        if (wordsEl) wordsEl.innerText = words.toLocaleString();
+        
+        var jsonEl = document.getElementById("cb-json-box");
+        var payloadObj = {
+          source: source,
+          url: window.location.href,
+          title: title,
+          messages: currentMsgs
+        };
+        var pStr = JSON.stringify(payloadObj);
+        if (jsonEl) {
+          jsonEl.value = pStr;
+        }
+        
+        var launchBtn = document.getElementById("cb-launch-btn");
+        if (launchBtn) {
+          launchBtn.href = origin + "/?import_mode=clipboard&source=" + source + "&title=" + encodeURIComponent(title);
+        }
+        
+        try {
+          var el = document.createElement("textarea");
+          el.value = pStr;
+          el.setAttribute("readonly", "");
+          el.style.position = "absolute";
+          el.style.left = "-9999px";
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand("copy");
+          document.body.removeChild(el);
+        } catch(e) {}
+        
+        mdTranscript = currentMsgs.map(function(m) {
+          var speaker = m.role === "user" ? "### 👤 HUMAN / USER" : "### 🤖 AI ASSISTANT (" + source + ")";
+          return speaker + "\\n\\n" + m.text + "\\n\\n---\\n";
+        }).join("\\n");
+      }
+
+      function startDeepScroll(btn) {
+        var container = findScrollContainer();
+        var accumulated = msgs;
+        var scrollCount = 0;
+        var consecutiveNoNew = 0;
+        
+        btn.disabled = true;
+        btn.style.background = "#451a03";
+        btn.innerText = "⏳ Deep Scanning Chat...";
+        
+        var scrollInterval = setInterval(function() {
+          var isAtTop = false;
+          var beforeScroll = 0;
+          var afterScroll = 0;
+          
+          if (container === window) {
+            beforeScroll = window.scrollY || document.documentElement.scrollTop;
+            window.scrollBy(0, -600);
+            afterScroll = window.scrollY || document.documentElement.scrollTop;
+            isAtTop = afterScroll === 0;
+          } else {
+            beforeScroll = container.scrollTop;
+            container.scrollTop = Math.max(0, container.scrollTop - 600);
+            afterScroll = container.scrollTop;
+            isAtTop = afterScroll === 0;
+          }
+          
+          scrollCount++;
+          
+          var newBatch = extractMessages();
+          var prevLen = accumulated.length;
+          accumulated = mergeBatches(accumulated, newBatch);
+          
+          if (accumulated.length === prevLen) {
+            consecutiveNoNew++;
+          } else {
+            consecutiveNoNew = 0;
+          }
+          
+          btn.innerText = "⏳ Scrolled " + scrollCount + "x (" + accumulated.length + " msgs)";
+          updateModalData(accumulated);
+          
+          if ((isAtTop && beforeScroll === 0) || consecutiveNoNew >= 15 || scrollCount > 150) {
+            clearInterval(scrollInterval);
+            btn.disabled = false;
+            btn.style.background = "#15803d";
+            btn.innerText = "✓ Deep Scan Complete (" + accumulated.length + " msgs)";
+            setTimeout(function() {
+              btn.style.background = "#7c2d12";
+              btn.innerText = "🔄 Deep Scan & Auto-Scroll";
+            }, 3000);
+          }
+        }, 120);
+      }
+
+      modal.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid #27272a;padding-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;background:' + badgeBg + ';color:#ffffff;padding:2px 6px;border-radius:4px;">' + source + '</span><span style="font-size:12px;font-weight:bold;color:#a1a1aa;font-family:monospace;">Bridge Extract</span></div><button id="cb-close-btn" style="background:none;border:none;color:#71717a;cursor:pointer;font-size:20px;line-height:1;padding:4px;margin-left:auto;">&times;</button></div><h3 style="font-size:14px;font-weight:600;color:#ffffff;margin:0 0 8px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + title + '</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0d0d0d;padding:10px;border-radius:6px;border:1px solid #1f1f1f;margin-bottom:14px;text-align:center;"><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Turns</span><strong id="cb-turns" style="font-size:12px;color:#e4e4e7;font-weight:500;">' + msgs.length + ' msgs</strong></div><div><span style="display:block;font-size:9px;color:#52525b;text-transform:uppercase;letter-spacing:0.5px;font-family:monospace;">Words</span><strong id="cb-words" style="font-size:12px;color:#e4e4e7;font-weight:500;">' + totalWords.toLocaleString() + '</strong></div></div><div style="margin-bottom:14px;">' + (clipboardSuccess ? '<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.2);color:#10b981;font-size:11px;padding:8px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;">✓ <strong>Auto-copied JSON to clipboard!</strong></div>' : '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#ef4444;font-size:11px;padding:8px 10px;border-radius:6px;">Auto-copy blocked. Please copy from text area.</div>') + '</div><div style="display:flex;flex-direction:column;gap:8px;"><button id="cb-deep-scan-btn" style="display:block;width:100%;text-align:center;background:#7c2d12;color:#ffffff;border:none;cursor:pointer;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(124,45,18,0.3);margin-bottom:4px;transition:all 0.2s;">🔄 Deep Scan & Auto-Scroll</button><a href="' + origin + '/?import_mode=clipboard&source=' + source + '&title=' + encodeURIComponent(title) + '" target="_blank" id="cb-launch-btn" style="display:block;text-align:center;background:#ffffff;color:#000000;text-decoration:none;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(255,255,255,0.1);">🚀 Open Bridge Workspace</a><button id="cb-copy-md-btn" style="display:block;width:100%;text-align:center;background:#18181b;color:#ffffff;border:1px solid #27272a;cursor:pointer;font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;padding:10px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);transition:all 0.2s;">📋 Copy Clean Transcript</button><button id="cb-toggle-json" style="background:none;border:none;color:#a1a1aa;cursor:pointer;font-size:11px;text-decoration:underline;padding:4px 0;align-self:center;">Show Raw JSON Payload</button><textarea id="cb-json-box" readonly style="display:none;width:100%;height:100px;background:#000000;color:#00ff66;font-family:monospace;font-size:10px;border:1px solid #27272a;border-radius:4px;padding:6px;box-sizing:border-box;resize:none;margin-top:6px;">' + payloadStr.replace(new RegExp("</textarea>", "gi"), "&lt;/textarea&gt;") + '</textarea></div>';
       
       document.body.appendChild(modal);
       
       document.getElementById("cb-close-btn").onclick = function() {
         modal.remove();
+      };
+
+      document.getElementById("cb-deep-scan-btn").onclick = function() {
+        startDeepScroll(this);
       };
 
       document.getElementById("cb-copy-md-btn").onclick = function() {
@@ -269,7 +827,7 @@ export default function BookmarkletSection() {
     const minified = rawJS
       .split('\n')
       .map(line => line.trim())
-      .filter(line => line.length > 0)
+      .filter(line => line.length > 0 && !line.startsWith('//'))
       .join(' ');
     return `javascript:${encodeURIComponent(minified)}`;
   };
@@ -373,9 +931,9 @@ export default function BookmarkletSection() {
               2
             </span>
             <div>
-              <h4 className="text-sm font-medium text-white mb-1">Open any AI Chat</h4>
+              <h4 className="text-sm font-medium text-white mb-1">Open &amp; Scroll Chat</h4>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Navigate to Claude.ai, ChatGPT, or Gemini and open any conversation you've had that you want to export.
+                Open your chat on Claude, ChatGPT, Gemini, or DeepSeek. <strong className="text-stone-300">Tip:</strong> If the chat is very long, scroll to the top once so the browser loads all older messages into memory first!
               </p>
             </div>
           </div>
